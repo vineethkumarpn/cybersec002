@@ -1,0 +1,233 @@
+options:
+  parameters:
+    author: ''
+    catch_exceptions: 'True'
+    category: NIST Wireless Monitoring
+    comment: ''
+    description: Receive-only B210 spectrum and energy monitor
+    gen_cmake: 'Off'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    id: nist_b210_passive_monitor
+    output_language: python
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    title: NIST B210 Passive Monitor (Receive Only)
+    window_size: 1280, 900
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [10, 10]
+    rotation: 0
+    state: enabled
+
+blocks:
+- name: center_freq
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: ''
+    label: Center frequency (Hz)
+    min_len: '300'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '70000000'
+    step: '1000000'
+    stop: '6000000000'
+    value: '2412000000'
+    widget: eng_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [30, 50]
+    rotation: 0
+    state: enabled
+- name: sample_rate
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: ''
+    label: Sample rate (samples/s)
+    min_len: '250'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '1000000'
+    step: '100000'
+    stop: '2000000'
+    value: '1000000'
+    widget: eng_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [30, 150]
+    rotation: 0
+    state: enabled
+- name: rx_gain
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: ''
+    label: RX gain (dB)
+    min_len: '250'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '0'
+    step: '1'
+    stop: '76'
+    value: '20'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [30, 250]
+    rotation: 0
+    state: enabled
+- name: antenna_port
+  id: variable_qtgui_chooser
+  parameters:
+    comment: ''
+    gui_hint: ''
+    label: RX antenna
+    label0: RX2
+    label1: TX/RX
+    label2: RX1
+    label3: ''
+    label4: ''
+    labels: '["RX2", "TX/RX", "RX1"]'
+    num_opts: '0'
+    option0: '"RX2"'
+    option1: '"TX/RX"'
+    option2: '"RX1"'
+    option3: '""'
+    option4: '""'
+    options: '["RX2", "TX/RX", "RX1"]'
+    orient: Qt.QVBoxLayout
+    type: string
+    value: '"RX2"'
+    widget: combo_box
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [30, 350]
+    rotation: 0
+    state: enabled
+- name: uhd_usrp_source_0
+  id: uhd_usrp_source
+  parameters:
+    affinity: ''
+    alias: ''
+    ant0: antenna_port
+    bw0: '0'
+    center_freq0: center_freq
+    clock_rate: '0.0'
+    comment: ''
+    dev_addr: '"type=b200"'
+    dev_args: '""'
+    gain0: rx_gain
+    gain_type0: default
+    nchan: '1'
+    num_mboards: '0'
+    otw: ''
+    rx_agc0: Disabled
+    samp_rate: sample_rate
+    start_time: '-1.0'
+    stream_args: ''
+    stream_chans: '[]'
+    sync: none
+    type: fc32
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [450, 170]
+    rotation: 0
+    state: enabled
+- name: blocks_complex_to_mag_squared_0
+  id: blocks_complex_to_mag_squared
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [700, 330]
+    rotation: 0
+    state: enabled
+- name: qtgui_freq_sink_x_0
+  id: qtgui_freq_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    average: '0.2'
+    autoscale: 'False'
+    axislabels: 'True'
+    color1: '"blue"'
+    comment: ''
+    ctrlpanel: 'False'
+    fc: center_freq
+    fftsize: '2048'
+    freqhalf: 'True'
+    grid: 'True'
+    label: '"Relative power"'
+    label1: '"B210 input"'
+    legend: 'True'
+    name: '"Received spectrum"'
+    nconnections: '1'
+    norm_window: 'False'
+    units: dB
+    update_time: '0.10'
+    wintype: window.WIN_BLACKMAN_hARRIS
+    ymax: '10'
+    ymin: '-120'
+    bw: sample_rate
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [900, 140]
+    rotation: 0
+    state: enabled
+- name: qtgui_time_sink_x_0
+  id: qtgui_time_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    autoscale: 'True'
+    comment: ''
+    entags: 'False'
+    grid: 'True'
+    name: '"Received power (linear)"'
+    nconnections: '1'
+    size: '1024'
+    srate: sample_rate
+    type: float
+    update_time: '0.10'
+    ylabel: '"Power"'
+    yunit: '"linear"'
+    ymax: '1'
+    ymin: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [900, 350]
+    rotation: 0
+    state: enabled
+
+connections:
+- [uhd_usrp_source_0, '0', qtgui_freq_sink_x_0, '0']
+- [uhd_usrp_source_0, '0', blocks_complex_to_mag_squared_0, '0']
+- [blocks_complex_to_mag_squared_0, '0', qtgui_time_sink_x_0, '0']
+
+metadata:
+  file_format: 1
+  grc_version: v3.10.12.0

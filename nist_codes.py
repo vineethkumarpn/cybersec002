@@ -2,7 +2,8 @@
 """Passive WLAN posture scanner with an optional B210 energy-only monitor.
 
 The B210 backend measures received signal power at one tuned frequency. It does
-not decode frames or write IQ samples.
+not decode frames or write IQ samples. For live GUI spectrum monitoring, open
+the accompanying nist_b210_passive_monitor.grc in GNU Radio Companion.
 """
 
 import argparse
