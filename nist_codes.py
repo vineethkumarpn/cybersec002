@@ -1,179 +1,212 @@
-1 #!/usr/bin/env bash
-    2 #
-    3 # nist_wlan_profile_audit.sh
-    4 # Audits local NetworkManager wireless profiles against NIST SP 800-153 baselines.
-    5 #
-    6
-    7 set -euo pipefail
-    8
-    9 echo "=================================================="
-   10 echo " NIST SP 800-153 Client Wireless Profile Audit"
-   11 echo "=================================================="
-   12
-   13 # Check if NetworkManager CLI is available
-   14 if ! command -v nmcli &>/dev/null; then
-   15     echo "Error: nmcli utility is required to inspect connection profiles." >&2
-   16     exit 1
-   17 fi
-   18
-   19 # Retrieve all stored Wi-Fi connection UUIDs
-   20 mapfile -t WIFI_CONNS < <(nmcli -t -f UUID,TYPE connection show | awk -F: '$2=="802-11-wireless" {print $1}')
-   21
-   22 if [ ${#WIFI_CONNS[@]} -eq 0 ]; then
-   23     echo "No stored wireless profiles found."
-   24     exit 0
-   25 fi
-   26
-   27 findings=0
-   28
-   29 for uuid in "${WIFI_CONNS[@]}"; do
-   30     name=$(nmcli -t -f connection.id connection show "$uuid" | cut -d: -f2)
-   31     key_mgmt=$(nmcli -t -f 802-11-wireless-security.key-mgmt connection show "$uuid" | cut -d: -f2)
-   32     autoconnect=$(nmcli -t -f connection.autoconnect connection show "$uuid" | cut -d: -f2)
-   33
-   34     echo ""
-   35     echo "Checking Profile: '$name' (UUID: $uuid)"
-   36
-   37     # Guideline: Eliminate unencrypted wireless networks
-   38     if [[ -z "$key_mgmt" || "$key_mgmt" == "none" ]]; then
-   39         echo "  [FAIL] Open / Unencrypted network profile detected."
-   40         ((findings++))
-   41     elif [[ "$key_mgmt" =~ "wep" ]]; then
-   42         echo "  [FAIL] Legacy WEP encryption detected (prohibited by NIST 800-153)."
-   43         ((findings++))
-   44     else
-   45         echo "  [PASS] Key management: $key_mgmt"
-   46     fi
-   47
-   48     # Guideline: Prevent automatic connection to open/untrusted profiles
-   49     if [[ "$autoconnect" == "yes" && ( -z "$key_mgmt" || "$key_mgmt" == "none" ) ]]; then
-   50         echo "  [FAIL] Autoconnect is ENABLED on an unencrypted profile."
-   51         ((findings++))
-   52     fi
-   53
-   54     # Guideline: Verify enterprise certificate settings if 802.1X is used
-   55     if [[ "$key_mgmt" =~ "802-1x" || "$key_mgmt" =~ "wpa-eap" ]]; then
-   56         ca_cert=$(nmcli -t -f 802-1x.ca-cert connection show "$uuid" | cut -d: -f2)
-   57         if [[ -z "$ca_cert" ]]; then
-   58             echo "  [WARNING] Enterprise connection lacks server CA validation."
-   59             ((findings++))
-   60         fi
-   61     fi
-   62 done
-   63
-   64 echo ""
-   65 echo "=================================================="
-   66 echo "Audit complete: $findings issue(s) identified."
-   67 echo "=================================================="
+#!/usr/bin/env python3
+"""Passive WLAN posture scanner with an optional B210 energy-only monitor.
 
-  ---
+The B210 backend measures received signal power at one tuned frequency. It does
+not decode frames or write IQ samples.
+"""
 
-  2. Passive WLAN Posture & Rogue AP Inspector (Python)
+import argparse
+import csv
+import io
+import math
+import shutil
+import subprocess
+import sys
 
-  NIST SP 800-153 Section 4 recommends regular monitoring of the local radio frequency space to detect unauthorized (rogue) APs and networks operating without mandatory encryption
-  baselines (such as WPA2-AES / WPA3).
 
-  This Python script queries the existing wireless device passively and summarizes visible broadcast beacons to highlight non-compliant access points.
+def scan_wireless_environment():
+    """Return visible access points reported by NetworkManager."""
+    if not shutil.which("nmcli"):
+        raise RuntimeError("'nmcli' binary not found; install NetworkManager.")
 
-     1 #!/usr/bin/env python3
-     2 """
-     3 nist_wlan_posture_scanner.py
-     4 Passive wireless environment scanner adhering to NIST SP 800-153 monitoring guidelines.
-     5 Uses standard administrative tools to audit visible access points.
-     6 """
-     7
-     8 import subprocess
-     9 import shutil
-    10 import sys
-    11 import csv
-    12 import io
-    13
-    14 def check_requirements():
-    15     if not shutil.which("nmcli"):
-    16         print("Error: 'nmcli' binary not found. This script requires NetworkManager.", file=sys.stderr)
-    17         sys.exit(1)
-    18
-    19 def scan_wireless_environment():
-    20     """
-    21     Triggers a passive Wi-Fi scan and returns the parsed list of visible access points.
-    22     """
-    23     # Uses standard passive scan command: nmcli -t -f BSSID,SSID,CHAN,FREQ,SIGNAL,SECURITY dev wifi list
-    24     cmd = ["nmcli", "-t", "-f", "BSSID,SSID,CHAN,FREQ,SIGNAL,SECURITY", "dev", "wifi", "list"]
-    25     
-    26     try:
-    27         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    28     except subprocess.CalledProcessError as e:
-    29         print(f"Error querying wireless interfaces: {e.stderr}", file=sys.stderr)
-    30         sys.exit(1)
-    31
-    32     reader = csv.reader(io.StringIO(result.stdout), delimiter=":")
-    33     aps = []
-    34
-    35     for row in reader:
-    36         # BSSID contains colons, standard split might create >6 elements
-    37         if len(row) < 6:
-    38             continue
-    39         
-    40         bssid = ":".join(row[:-5])
-    41         ssid = row[-5]
-    42         chan = row[-4]
-    43         freq = row[-3]
-    44         signal = row[-2]
-    45         security = row[-1]
-    46
-    47         aps.append({
-    48             "bssid": bssid,
-    49             "ssid": ssid if ssid else "<Hidden SSID>",
-    50             "channel": chan,
-    51             "freq": freq,
-    52             "signal": signal,
-    53             "security": security if security else "OPEN"
-    54         })
-    55
-    56     return aps
-    57
-    58 def evaluate_compliance(ap_list):
-    59     """
-    60     Evaluates discovered APs against NIST SP 800-153 security requirements:
-    61     - No unencrypted networks;
-    62     - No deprecated cryptographic suites (WEP, WPA1/TKIP);
-    63     - Flagging hidden SSIDs or non-WPA2/WPA3 endpoints;
-    64     """
-    65     print(f"\nDiscovered {len(ap_list)} visible Access Points.\n")
-    66     print(f"{'BSSID':<20} {'SSID':<25} {'CHAN':<6} {'SIGNAL':<8} {'STATUS':<10} {'DETAILS'}")
-    67     print("-" * 90)
-    68
-    69     findings = 0
-    70
-    71     for ap in ap_list:
-    72         sec = ap["security"].upper()
-    73         status = "COMPLIANT"
-    74         details = sec
-    75
-    76         if sec == "OPEN":
-    77             status = "FAIL"
-    78             details = "Unencrypted network (No authentication/encryption)"
-    79             findings += 1
-    80         elif "WEP" in sec:
-    81             status = "FAIL"
-    82             details = "Legacy WEP cipher (Deprecated by NIST)"
-    83             findings += 1
-    84         elif "WPA1" in sec or "TKIP" in sec:
-    85             status = "WARNING"
-    86             details = "Weak encryption / TKIP suite"
-    87             findings += 1
-    88         elif "WPA2" in sec or "WPA3" in sec:
-    89             status = "PASS"
-    90             details = sec
-    91         else:
-    92             status = "UNKNOWN"
-    93
-    94         print(f"{ap['bssid']:<20} {ap['ssid'][:24]:<25} {ap['channel']:<6} {ap['signal']:<8} {status:<10} {details}")
-    95
-    96     print("-" * 90)
-    97     print(f"Total non-compliant or warning APs observed: {findings}\n")
-    98
-    99 if __name__ == "__main__":
-   100     check_requirements()
-   101     access_points = scan_wireless_environment()
-   102     evaluate_compliance(access_points)
+    cmd = [
+        "nmcli",
+        "-t",
+        "-f",
+        "BSSID,SSID,CHAN,FREQ,SIGNAL,SECURITY",
+        "dev",
+        "wifi",
+        "list",
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() or str(exc)
+        raise RuntimeError(f"Error querying wireless interfaces: {detail}") from exc
+
+    aps = []
+    for row in csv.reader(io.StringIO(result.stdout), delimiter=":"):
+        if len(row) < 6:
+            continue
+
+        bssid = ":".join(row[:-5])
+        ssid, channel, frequency, signal, security = row[-5:]
+        aps.append(
+            {
+                "bssid": bssid,
+                "ssid": ssid if ssid else "<Hidden SSID>",
+                "channel": channel,
+                "freq": frequency,
+                "signal": signal,
+                "security": security if security else "OPEN",
+            }
+        )
+
+    return aps
+
+
+def evaluate_compliance(ap_list):
+    """Summarize visible AP security against the scanner's configured baseline."""
+    print(f"\nDiscovered {len(ap_list)} visible Access Points.\n")
+    print(f"{'BSSID':<20} {'SSID':<25} {'CHAN':<6} {'SIGNAL':<8} {'STATUS':<10} {'DETAILS'}")
+    print("-" * 90)
+
+    findings = 0
+
+    for ap in ap_list:
+        sec = ap["security"].upper()
+        status = "COMPLIANT"
+        details = sec
+
+        if sec == "OPEN":
+            status = "FAIL"
+            details = "Unencrypted network (No authentication/encryption)"
+            findings += 1
+        elif "WEP" in sec:
+            status = "FAIL"
+            details = "Legacy WEP cipher (Deprecated by NIST)"
+            findings += 1
+        elif "WPA1" in sec or "TKIP" in sec:
+            status = "WARNING"
+            details = "Weak encryption / TKIP suite"
+            findings += 1
+        elif "WPA2" in sec or "WPA3" in sec:
+            status = "PASS"
+            details = sec
+        else:
+            status = "UNKNOWN"
+
+        print(
+            f"{ap['bssid']:<20} {ap['ssid'][:24]:<25} {ap['channel']:<6} "
+            f"{ap['signal']:<8} {status:<10} {details}"
+        )
+
+    print("-" * 90)
+    print(f"Total non-compliant or warning APs observed: {findings}\n")
+
+
+def measure_b210_energy(frequency_mhz, sample_rate, duration, gain):
+    """Measure mean and peak received power without retaining raw IQ samples."""
+    try:
+        from gnuradio import blocks, gr, uhd
+    except ImportError as exc:
+        raise RuntimeError(
+            "GNU Radio Python modules with UHD support are required for --backend b210."
+        ) from exc
+
+    sample_count = int(sample_rate * duration)
+    flowgraph = gr.top_block("B210 receive-only energy monitor")
+    source = uhd.usrp_source(
+        "type=b200",
+        uhd.stream_args(cpu_format="fc32", channels=[0]),
+    )
+    source.set_samp_rate(sample_rate)
+    source.set_center_freq(frequency_mhz * 1_000_000, 0)
+    source.set_gain(gain, 0)
+    source.set_antenna("RX2", 0)
+
+    limit = blocks.head(gr.sizeof_gr_complex, sample_count)
+    power = blocks.complex_to_mag_squared(1)
+    sink = blocks.vector_sink_f()
+    flowgraph.connect(source, limit, power, sink)
+    flowgraph.run()
+
+    powers = sink.data()
+    if not powers:
+        raise RuntimeError("The B210 returned no samples.")
+
+    mean_power = sum(powers) / len(powers)
+    peak_power = max(powers)
+
+    def to_dbfs(value):
+        return 10 * math.log10(value) if value > 0 else float("-inf")
+
+    print(
+        f"B210 receive-only energy at {frequency_mhz:.3f} MHz "
+        f"({len(powers)} samples): mean {to_dbfs(mean_power):.2f} dBFS, "
+        f"peak {to_dbfs(peak_power):.2f} dBFS"
+    )
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--backend",
+        choices=("nmcli", "b210", "both"),
+        default="nmcli",
+        help="Use NetworkManager AP scanning, B210 energy monitoring, or both.",
+    )
+    parser.add_argument(
+        "--frequency-mhz",
+        type=float,
+        default=2412.0,
+        help="B210 receive center frequency in MHz (default: 2412).",
+    )
+    parser.add_argument(
+        "--sample-rate",
+        type=float,
+        default=1_000_000,
+        help="B210 sample rate in samples/second (maximum: 2,000,000).",
+    )
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=0.5,
+        help="B210 measurement duration in seconds (maximum: 2; total samples capped).",
+    )
+    parser.add_argument(
+        "--gain",
+        type=float,
+        default=20.0,
+        help="B210 receive gain in dB (range: 0-76).",
+    )
+    args = parser.parse_args(argv)
+
+    if args.backend in ("b210", "both"):
+        if not 70 <= args.frequency_mhz <= 6000:
+            parser.error("--frequency-mhz must be between 70 and 6000.")
+        if not 1 <= args.sample_rate <= 2_000_000:
+            parser.error("--sample-rate must be between 1 and 2,000,000.")
+        if not 0 < args.duration <= 2:
+            parser.error("--duration must be greater than 0 and no more than 2.")
+        if args.sample_rate * args.duration > 1_000_000:
+            parser.error("--sample-rate multiplied by --duration must not exceed 1,000,000 samples.")
+        if not 0 <= args.gain <= 76:
+            parser.error("--gain must be between 0 and 76.")
+
+    return args
+
+
+def main(argv=None):
+    args = parse_args(argv)
+
+    try:
+        if args.backend in ("nmcli", "both"):
+            evaluate_compliance(scan_wireless_environment())
+        if args.backend in ("b210", "both"):
+            measure_b210_energy(
+                args.frequency_mhz,
+                args.sample_rate,
+                args.duration,
+                args.gain,
+            )
+    except (OSError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
